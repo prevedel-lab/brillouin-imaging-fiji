@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>net.imagej</groupId>
+    <artifactId>brillouin-imaging-fiji</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+
+    <name>Brillouin Imaging FIJI Plugin</name>
+    <description>A FIJI plugin to work with brim files, containing Brillouin imaging data</description>
+    <url>https://github.com/prevedel-lab/brillouin-imaging-fiji</url>
+    <inceptionYear>2026</inceptionYear>
+    <organization>
+        <name>Prevedel Lab</name>
+        <url>https://github.com/prevedel-lab</url>
+    </organization>
+    <licenses>
+        <license>
+            <name>GNU Lesser General Public License v3.0</name>
+            <url>https://www.gnu.org/licenses/lgpl-3.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>prevedel-lab</id>
+            <name>Prevedel Lab</name>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/prevedel-lab/brillouin-imaging-fiji</connection>
+        <developerConnection>scm:git:git@github.com:prevedel-lab/brillouin-imaging-fiji</developerConnection>
+        <tag>HEAD</tag>
+        <url>https://github.com/prevedel-lab/brillouin-imaging-fiji</url>
+    </scm>
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/prevedel-lab/brillouin-imaging-fiji/issues</url>
+    </issueManagement>
+    <ciManagement>
+        <system>GitHub Actions</system>
+        <url>https://github.com/prevedel-lab/brillouin-imaging-fiji/actions</url>
+    </ciManagement>
+
+    <properties>
+        <package-name>net.imagej.brimfile</package-name>
+        <license.licenseName>lgpl-3.0</license.licenseName>
+        <license.copyrightOwners>Prevedel Lab</license.copyrightOwners>
+        
+        <!-- Apposed version -->
+        <appose.version>0.8.0</appose.version>
+        
+        <!-- Java version -->
+        <maven.compiler.source>8</maven.compiler.source>
+        <maven.compiler.target>8</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- ImageJ core dependency -->
+        <dependency>
+            <groupId>net.imagej</groupId>
+            <artifactId>ij</artifactId>
+            <version>1.54f</version>
+        </dependency>
+
+        <!-- Apposed dependency for Python integration -->
+        <dependency>
+            <groupId>org.apposed</groupId>
+            <artifactId>appose</artifactId>
+            <version>${appose.version}</version>
+        </dependency>
+
+        <!-- Test dependencies -->
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.2</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>8</source>
+                    <target>8</target>
+                </configuration>
+            </plugin>
+         <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-shade-plugin</artifactId>
+            <version>3.5.0</version>
+            <executions>
+                <execution>
+                    <phase>package</phase>
+                    <goals>
+                        <goal>shade</goal>
+                    </goals>
+                    <configuration>
+                        <filters>
+                            <filter>
+                                <artifact>*:*</artifact>
+                                <excludes>
+                                    <exclude>META-INF/*.SF</exclude>
+                                    <exclude>META-INF/*.DSA</exclude>
+                                    <exclude>META-INF/*.RSA</exclude>
+                                </excludes>
+                            </filter>
+                        </filters>
+                    </configuration>
+                </execution>
+            </executions>
+        </plugin>
+        </plugins>
+    </build>
+</project>
