@@ -72,5 +72,37 @@ final class PyUtils {
             throw new Exception(errorMsg);
         }
     }
+
+    /**
+     * Get the installed brimfile package version from the active Python service.
+     *
+     * @param python The Python service to query
+     * @return brimfile version string, or "unknown" if it cannot be determined
+     */
+    static String getBrimfileVersion(Service python) {
+        String pythonCode =
+            "import importlib.metadata\n" +
+            "version = 'unknown'\n" +
+            "try:\n" +
+            "    version = importlib.metadata.version('brimfile')\n" +
+            "except Exception:\n" +
+            "    try:\n" +
+            "        import brimfile as brim\n" +
+            "        version = getattr(brim, '__version__', 'unknown')\n" +
+            "    except Exception:\n" +
+            "        version = 'unknown'\n" +
+            "task.outputs['brimfile_version'] = str(version)\n";
+
+        try {
+            Map<String, Object> outputs = executePythonCode(python, pythonCode);
+            Object version = outputs.get("brimfile_version");
+            if (version == null) {
+                return "unknown";
+            }
+            return version.toString();
+        } catch (Exception e) {
+            return "unknown";
+        }
+    }
     
 }

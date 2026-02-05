@@ -1,18 +1,22 @@
 package net.imagej.brimfile;
 
 import ij.IJ;
+import ij.CompositeImage;
 import ij.ImagePlus;
 import ij.ImageStack;
 import ij.measure.Calibration;
 import ij.plugin.PlugIn;
 import ij.process.FloatProcessor;
+import ij.gui.GenericDialog;
 
 import org.apposed.appose.Environment;
 import org.apposed.appose.Service;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * ImageJ plugin to open BRIM (Brillouin Imaging) files.
@@ -21,6 +25,8 @@ import java.util.Map;
  * to read .brim.zarr and .brim.zip files containing Brillouin microscopy data.
  */
 public class BrimFileOpener implements PlugIn {
+
+    private static final AtomicBoolean BRIMFILE_VERSION_LOGGED = new AtomicBoolean(false);
 
     @Override
     public void run(String arg) {
@@ -57,6 +63,7 @@ public class BrimFileOpener implements PlugIn {
         Environment env = PyUtils.getOrCreateBrimfileEnvironment();
         
         try (Service python = env.python()) {
+            logBrimfileVersionIfNeeded(python);
             IJ.showStatus("Loading BRIM file...");   
             
             String pythonCode = String.format(
@@ -84,7 +91,29 @@ public class BrimFileOpener implements PlugIn {
             Map<String, Object> outputs = PyUtils.executePythonCode(python, pythonCode);
             @SuppressWarnings("unchecked")
             List<String> quantities = (List<String>) outputs.get("quantities");
-            System.out.println("Quantities: " + quantities);
+
+            GenericDialog channels_selection_dialog = new GenericDialog("Select channels");
+            for (String quantity : quantities) {
+                channels_selection_dialog.addCheckbox(quantity, false);
+            }
+            channels_selection_dialog.showDialog();
+            if (channels_selection_dialog.wasCanceled()) {
+                return null;
+            }
+
+            List<String> selectedQuantities = new ArrayList<String>();
+            for (String quantity : quantities) {
+                if (channels_selection_dialog.getNextBoolean()) {
+                    selectedQuantities.add(quantity);
+                }
+            }
+
+            if (selectedQuantities.isEmpty()) {
+                IJ.error("BRIM File Opener", "No channels selected.");
+                return null;
+            }
+
+            String selectedQuantitiesLiteral = toPythonStringListLiteral(selectedQuantities);
             
             // TODO: check if there is a way of sharing variables between tasks rather than closing the file and opening it again here
             pythonCode = String.format(
@@ -93,42 +122,94 @@ public class BrimFileOpener implements PlugIn {
                 "\n" +
                 "# Open the BRIM file\n" +
                 "f = brim.File('%s')\n" +
-                "# Get the first data group\n" +
-                "d = f.get_data()\n" +
+                "selected_quantities = %s\n" +
                 "\n" +
-                "# Get the first analysis results\n" +
-                "ar = d.get_analysis_results()\n" +
+                "# Define outputs in case loading fails\n" +
+                "task.outputs['image_shape'] = [0, 0, 0]\n" +
+                "task.outputs['image_data'] = []\n" +
+                "task.outputs['channel_names'] = []\n" +
+                "task.outputs['num_channels'] = 0\n" +
+                "task.outputs['channel_errors'] = []\n" +
                 "\n" +
-                "# Get the Brillouin shift image\n" +
-                "Quantity = brim.Data.AnalysisResults.Quantity\n" +
-                "PeakType = brim.Data.AnalysisResults.PeakType\n" +
-                "img, px_size = ar.get_image(Quantity.Shift, PeakType.average)\n" +
+                "try:\n" +
+                "    # Get the first data group\n" +
+                "    d = f.get_data()\n" +
                 "\n" +
-                "# Get metadata\n" +
-                "md = d.get_metadata()\n" +
-                "metadata_dict = md.all_to_dict()\n" +
+                "    # Get the first analysis results\n" +
+                "    ar = d.get_analysis_results()\n" +
                 "\n" +
-                "# Close the file\n" +
-                "f.close()\n" +
+                "    # Get selected channel images\n" +
+                "    Quantity = brim.Data.AnalysisResults.Quantity\n" +
+                "    PeakType = brim.Data.AnalysisResults.PeakType\n" +
+                "    channel_images = []\n" +
+                "    channel_names = []\n" +
+                "    channel_errors = []\n" +
+                "    image_shape = None\n" +
+                "    px_size_ref = None\n" +
                 "\n" +
-                "# Prepare result dictionary\n" +
-                "task.outputs['image_shape'] = img.shape\n" +
-                "task.outputs['image_data'] = img.flatten().tolist()\n" +
-                "task.outputs['data_group_name'] = d.get_name()\n" +
-                "task.outputs['ar_name'] = ar.get_name()\n" +
+                "    for quantity_name in selected_quantities:\n" +
+                "        try:\n" +
+                "            quantity_enum = getattr(Quantity, quantity_name)\n" +
+                "        except AttributeError:\n" +
+                "            channel_errors.append(f'Unknown quantity: {quantity_name}')\n" +
+                "            continue\n" +
                 "\n" +
-                "# Parse pixel size\n" +
-                "if px_size is not None:\n" +
-                "    task.outputs['pixel_depth'] = float(px_size[0].value)\n" +
-                "    task.outputs['pixel_height'] = float(px_size[1].value)\n" +
-                "    task.outputs['pixel_width'] = float(px_size[2].value)\n" +
-                "    task.outputs['pixel_unit'] = str(px_size[2].units)\n" +
-                "else:\n" +
-                "    task.outputs['pixel_depth'] = 1.0\n" +
-                "    task.outputs['pixel_height'] = 1.0\n" +
-                "    task.outputs['pixel_width'] = 1.0\n" +
-                "    task.outputs['pixel_unit'] = 'um'\n",
-                path.replace("\\", "\\\\")
+                "        try:\n" +
+                "            img, px_size = ar.get_image(quantity_enum, PeakType.average)\n" +
+                "        except Exception as e:\n" +
+                "            channel_errors.append(f'Failed to load {quantity_name}: {e}')\n" +
+                "            continue\n" +
+                "\n" +
+                "        if img is None:\n" +
+                "            channel_errors.append(f'No image data for {quantity_name}')\n" +
+                "            continue\n" +
+                "\n" +
+                "        if image_shape is None:\n" +
+                "            image_shape = img.shape\n" +
+                "            px_size_ref = px_size\n" +
+                "        elif img.shape != image_shape:\n" +
+                "            channel_errors.append(f'Incompatible shape for {quantity_name}: {img.shape} != {image_shape}')\n" +
+                "            continue\n" +
+                "\n" +
+                "        channel_names.append(quantity_name)\n" +
+                "        channel_images.append(img)\n" +
+                "\n" +
+                "    if image_shape is not None and channel_images:\n" +
+                "        nz, ny, nx = image_shape\n" +
+                "        stack_data = []\n" +
+                "        for z in range(nz):\n" +
+                "            for channel_img in channel_images:\n" +
+                "                stack_data.extend(channel_img[z].flatten().tolist())\n" +
+                "    else:\n" +
+                "        stack_data = []\n" +
+                "        image_shape = (0, 0, 0)\n" +
+                "\n" +
+                "    data_group_name = d.get_name()\n" +
+                "    ar_name = ar.get_name()\n" +
+                "\n" +
+                "    task.outputs['image_shape'] = list(image_shape)\n" +
+                "    task.outputs['image_data'] = stack_data\n" +
+                "    task.outputs['data_group_name'] = data_group_name\n" +
+                "    task.outputs['ar_name'] = ar_name\n" +
+                "    task.outputs['channel_names'] = channel_names\n" +
+                "    task.outputs['num_channels'] = len(channel_names)\n" +
+                "    task.outputs['channel_errors'] = channel_errors\n" +
+                "\n" +
+                "    # Parse pixel size\n" +
+                "    if px_size_ref is not None:\n" +
+                "        task.outputs['pixel_depth'] = float(px_size_ref[0].value)\n" +
+                "        task.outputs['pixel_height'] = float(px_size_ref[1].value)\n" +
+                "        task.outputs['pixel_width'] = float(px_size_ref[2].value)\n" +
+                "        task.outputs['pixel_unit'] = str(px_size_ref[2].units)\n" +
+                "    else:\n" +
+                "        task.outputs['pixel_depth'] = 1.0\n" +
+                "        task.outputs['pixel_height'] = 1.0\n" +
+                "        task.outputs['pixel_width'] = 1.0\n" +
+                "        task.outputs['pixel_unit'] = 'um'\n" +
+                "finally:\n" +
+                "    f.close()\n",
+                path.replace("\\", "\\\\"),
+                selectedQuantitiesLiteral
             );         
             
             outputs = PyUtils.executePythonCode(python, pythonCode);
@@ -140,6 +221,28 @@ public class BrimFileOpener implements PlugIn {
             List<Number> imageData = (List<Number>) outputs.get("image_data");
             @SuppressWarnings("unchecked")
             List<Number> shapeList = (List<Number>) outputs.get("image_shape");
+            @SuppressWarnings("unchecked")
+            List<String> channelNames = (List<String>) outputs.get("channel_names");
+            @SuppressWarnings("unchecked")
+            List<String> channelErrors = (List<String>) outputs.get("channel_errors");
+
+            int nc = ((Number) outputs.get("num_channels")).intValue();
+
+            if (channelNames == null) {
+                channelNames = new ArrayList<String>();
+            }
+
+            if (channelErrors != null && !channelErrors.isEmpty()) {
+                IJ.log("BRIM File Opener: some selected channels were skipped:");
+                for (String channelError : channelErrors) {
+                    IJ.log("  - " + channelError);
+                }
+            }
+
+            if (nc <= 0 || shapeList == null || shapeList.size() < 3 || imageData == null || imageData.isEmpty()) {
+                IJ.error("BRIM File Opener", "None of the selected channels could be loaded.");
+                return null;
+            }
             
             int nz = shapeList.get(0).intValue();
             int ny = shapeList.get(1).intValue();
@@ -154,13 +257,26 @@ public class BrimFileOpener implements PlugIn {
             String unit = (String) outputs.get("pixel_unit");
             
             // Convert to ImageJ ImagePlus
-            ImagePlus imp = convertToImagePlus(imageData, nz, ny, nx, 
+            ImagePlus imp = convertToImagePlus(imageData, nc, nz, ny, nx,
                 pixelDepth, pixelHeight, pixelWidth, unit, 
-                dataGroupName, arName, path);
+                dataGroupName, arName, path, channelNames);
             
             IJ.showStatus("BRIM file loaded successfully");
             return imp;            
         }
+    }
+
+    private void logBrimfileVersionIfNeeded(Service python) {
+        if (BRIMFILE_VERSION_LOGGED.get()) {
+            return;
+        }
+
+        String version = PyUtils.getBrimfileVersion(python);
+        String message = "BRIM File Opener using brimfile Python package version: " + version;
+
+        IJ.log(message);
+        System.out.println(message);
+        BRIMFILE_VERSION_LOGGED.set(true);
     }
     
 
@@ -168,28 +284,38 @@ public class BrimFileOpener implements PlugIn {
     /**
      * Convert flattened image data to ImageJ ImagePlus.
      */
-    private ImagePlus convertToImagePlus(List<Number> imageData, int nz, int ny, int nx,
+    private ImagePlus convertToImagePlus(List<Number> imageData, int nc, int nz, int ny, int nx,
                                          double pixelDepth, double pixelHeight, double pixelWidth, String unit,
-                                         String dataGroupName, String arName, String path) {
+                                         String dataGroupName, String arName, String path, List<String> channelNames) {
         // Create ImageStack
         ImageStack stack = new ImageStack(nx, ny);
         
-        // Convert flattened list to ImageJ stack
+        // Convert flattened list to ImageJ hyperstack order: C changes fastest, then Z.
         for (int z = 0; z < nz; z++) {
-            float[] pixels = new float[nx * ny];
-            int baseIndex = z * nx * ny;
-            
-            for (int i = 0; i < nx * ny; i++) {
-                pixels[i] = imageData.get(baseIndex + i).floatValue();
+            for (int c = 0; c < nc; c++) {
+                float[] pixels = new float[nx * ny];
+                int baseIndex = (z * nc + c) * nx * ny;
+
+                for (int i = 0; i < nx * ny; i++) {
+                    pixels[i] = imageData.get(baseIndex + i).floatValue();
+                }
+
+                FloatProcessor fp = new FloatProcessor(nx, ny, pixels);
+                String channelName = c < channelNames.size() ? channelNames.get(c) : "ch" + (c + 1);
+                stack.addSlice(channelName + " z=" + (z + 1), fp);
             }
-            
-            FloatProcessor fp = new FloatProcessor(nx, ny, pixels);
-            stack.addSlice("z=" + (z + 1), fp);
         }
         
         // Create ImagePlus
-        String title = new File(path).getName() + " - " + dataGroupName + " - Brillouin Shift";
+        String channelTitle = (nc == 1 && !channelNames.isEmpty()) ? channelNames.get(0) : "Channels";
+        String title = new File(path).getName() + " - " + dataGroupName + " - " + arName + " - " + channelTitle;
         ImagePlus imp = new ImagePlus(title, stack);
+
+        imp.setDimensions(nc, nz, 1);
+        imp.setOpenAsHyperStack(true);
+        if (nc > 1) {
+            imp = new CompositeImage(imp, CompositeImage.GRAYSCALE);
+        }
         
         // Set calibration
         Calibration cal = imp.getCalibration();
@@ -202,6 +328,19 @@ public class BrimFileOpener implements PlugIn {
         imp.setDisplayRange(imp.getStatistics().min, imp.getStatistics().max);
         
         return imp;
+    }
+
+    private String toPythonStringListLiteral(List<String> values) {
+        StringBuilder builder = new StringBuilder("[");
+        for (int i = 0; i < values.size(); i++) {
+            if (i > 0) {
+                builder.append(", ");
+            }
+            String escaped = values.get(i).replace("\\", "\\\\").replace("'", "\\'");
+            builder.append("'").append(escaped).append("'");
+        }
+        builder.append("]");
+        return builder.toString();
     }
 
     /**
