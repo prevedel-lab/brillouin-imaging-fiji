@@ -6,6 +6,7 @@ import ij.ImageStack;
 import ij.measure.Calibration;
 import ij.plugin.PlugIn;
 import ij.process.FloatProcessor;
+import ij.gui.GenericDialog;
 
 import org.apposed.appose.Environment;
 import org.apposed.appose.Service;
@@ -84,7 +85,15 @@ public class BrimFileOpener implements PlugIn {
             Map<String, Object> outputs = PyUtils.executePythonCode(python, pythonCode);
             @SuppressWarnings("unchecked")
             List<String> quantities = (List<String>) outputs.get("quantities");
-            System.out.println("Quantities: " + quantities);
+
+            GenericDialog gd = new GenericDialog("Select channels");
+            for (String quantity : quantities) {
+                gd.addCheckbox(quantity, false);
+            }
+            gd.showDialog();
+            if (gd.wasCanceled()) {
+                return null;
+            }
             
             // TODO: check if there is a way of sharing variables between tasks rather than closing the file and opening it again here
             pythonCode = String.format(
