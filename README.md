@@ -55,6 +55,13 @@ On first use, the plugin will automatically:
 2. Select your BRIM file in the file chooser
 3. The plugin will load the Brillouin shift image and display it
 
+### Drag And Drop
+
+- Dragging a `.brim.zip` file or `.brim.zarr` folder into the FIJI main window is supported.
+- The BRIM drag-and-drop handler is installed automatically the first time you run **File > Import > BRIM File (.brim.zarr, .brim.zip)...**.
+- You can also install it explicitly via **File > Import > Enable BRIM Drag-and-Drop**.
+- The installation needs to be done again if you restart FIJI.
+
 The plugin automatically:
 - Loads the first data group in the BRIM file
 - Extracts the first analysis results

@@ -39,16 +39,18 @@ public class BrimFileOpener implements PlugIn {
 
     @Override
     public void run(String arg) {
-        String path = arg;
-        // If arg is empty, show file chooser
-        path = FileInput.promptForPath(path);   
-        if (path == null) {
+        BrimDropHandler.installIfNeeded();
+        openAndShow(arg);
+    }
+
+    static void openAndShow(String path) {
+        String normalizedPath = FileInput.promptForPath(path);
+        if (normalizedPath == null) {
             return;
         }
 
-        // Open and display the BRIM file
         try {
-            ImagePlus imp = openBrimFile(path);
+            ImagePlus imp = new BrimFileOpener().openBrimFile(normalizedPath);
             if (imp != null) {
                 imp.show();
             }
