@@ -14,8 +14,12 @@ import org.apposed.appose.Environment;
 import org.apposed.appose.NDArray;
 import org.apposed.appose.Service;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.FloatBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -130,102 +134,17 @@ public class BrimFileOpener implements PlugIn {
             String selectedQuantitiesLiteral = toPythonStringListLiteral(selectedQuantities);
             
             // TODO: check if there is a way of sharing variables between tasks rather than closing the file and opening it again here
-            pythonCode = String.format(
-                "import appose\n" +
-                "import brimfile as brim\n" +
-                "import numpy as np\n" +
-                "\n" +
-                "# Open the BRIM file\n" +
-                "f = brim.File('%s')\n" +
-                "selected_quantities = %s\n" +
-                "\n" +
-                "# Define outputs in case loading fails\n" +
-                "task.outputs['image_shape'] = [0, 0, 0]\n" +
-                "task.outputs['image_data'] = None\n" +
-                "task.outputs['channel_names'] = []\n" +
-                "task.outputs['num_channels'] = 0\n" +
-                "task.outputs['channel_errors'] = []\n" +
-                "\n" +
-                "try:\n" +
-                "    # Get the first data group\n" +
-                "    d = f.get_data()\n" +
-                "\n" +
-                "    # Get the first analysis results\n" +
-                "    ar = d.get_analysis_results()\n" +
-                "\n" +
-                "    # Get selected channel images\n" +
-                "    Quantity = brim.Data.AnalysisResults.Quantity\n" +
-                "    PeakType = brim.Data.AnalysisResults.PeakType\n" +
-                "    channel_images = []\n" +
-                "    channel_names = []\n" +
-                "    channel_errors = []\n" +
-                "    image_shape = None\n" +
-                "    px_size_ref = None\n" +
-                "\n" +
-                "    for quantity_name in selected_quantities:\n" +
-                "        try:\n" +
-                "            quantity_enum = getattr(Quantity, quantity_name)\n" +
-                "        except AttributeError:\n" +
-                "            channel_errors.append(f'Unknown quantity: {quantity_name}')\n" +
-                "            continue\n" +
-                "\n" +
-                "        try:\n" +
-                "            img, px_size = ar.get_image(quantity_enum, PeakType.average)\n" +
-                "        except Exception as e:\n" +
-                "            channel_errors.append(f'Failed to load {quantity_name}: {e}')\n" +
-                "            continue\n" +
-                "\n" +
-                "        if img is None:\n" +
-                "            channel_errors.append(f'No image data for {quantity_name}')\n" +
-                "            continue\n" +
-                "\n" +
-                "        if image_shape is None:\n" +
-                "            image_shape = img.shape\n" +
-                "            px_size_ref = px_size\n" +
-                "        elif img.shape != image_shape:\n" +
-                "            channel_errors.append(f'Incompatible shape for {quantity_name}: {img.shape} != {image_shape}')\n" +
-                "            continue\n" +
-                "\n" +
-                "        channel_names.append(quantity_name)\n" +
-                "        channel_images.append(img)\n" +
-                "\n" +
-                "    if image_shape is not None and channel_images:\n" +
-                "        nz, ny, nx = image_shape\n" +
-                "        stack_data = appose.NDArray('float32', [nz, len(channel_images), ny, nx])\n" +
-                "        stack_view = stack_data.ndarray()\n" +
-                "        for c, channel_img in enumerate(channel_images):\n" +
-                "            stack_view[:, c, :, :] = channel_img.astype(np.float32, copy=False)\n" +
-                "    else:\n" +
-                "        stack_data = None\n" +
-                "        image_shape = (0, 0, 0)\n" +
-                "\n" +
-                "    data_group_name = d.get_name()\n" +
-                "    ar_name = ar.get_name()\n" +
-                "\n" +
-                "    task.outputs['image_shape'] = list(image_shape)\n" +
-                "    task.outputs['image_data'] = stack_data\n" +
-                "    task.outputs['data_group_name'] = data_group_name\n" +
-                "    task.outputs['ar_name'] = ar_name\n" +
-                "    task.outputs['channel_names'] = channel_names\n" +
-                "    task.outputs['num_channels'] = len(channel_names)\n" +
-                "    task.outputs['channel_errors'] = channel_errors\n" +
-                "\n" +
-                "    # Parse pixel size\n" +
-                "    if px_size_ref is not None:\n" +
-                "        task.outputs['pixel_depth'] = float(px_size_ref[0].value)\n" +
-                "        task.outputs['pixel_height'] = float(px_size_ref[1].value)\n" +
-                "        task.outputs['pixel_width'] = float(px_size_ref[2].value)\n" +
-                "        task.outputs['pixel_unit'] = str(px_size_ref[2].units)\n" +
-                "    else:\n" +
-                "        task.outputs['pixel_depth'] = 1.0\n" +
-                "        task.outputs['pixel_height'] = 1.0\n" +
-                "        task.outputs['pixel_width'] = 1.0\n" +
-                "        task.outputs['pixel_unit'] = 'um'\n" +
-                "finally:\n" +
-                "    f.close()\n",
-                path.replace("\\", "\\\\"),
-                selectedQuantitiesLiteral
-            );         
+            try {
+                String pythonTemplate = readResourceAsString("/script/load_brimfile.py");
+                pythonCode = String.format(
+                    pythonTemplate,
+                    path.replace("\\", "\\\\"),
+                    selectedQuantitiesLiteral
+                );
+            } catch (IOException e) {
+                IJ.error("BRIM File Opener", "Failed to load Python script: " + e.getMessage());
+                return null;
+            }         
             
             outputs = PyUtils.executePythonCode(python, pythonCode);
 
@@ -480,8 +399,28 @@ public class BrimFileOpener implements PlugIn {
         return builder.toString();
     }
 
-    /**
-     * Main method for testing the plugin standalone.
+    /**     * Read a resource file as a string.
+     * 
+     * @param resourcePath the path to the resource (e.g., "/script/load_brimfile.py")
+     * @return the resource file contents as a string
+     * @throws IOException if the resource cannot be read
+     */
+    private String readResourceAsString(String resourcePath) throws IOException {
+        try (InputStream is = getClass().getResourceAsStream(resourcePath)) {
+            if (is == null) {
+                throw new IOException("Resource not found: " + resourcePath);
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            while ((bytesRead = is.read(buffer)) != -1) {
+                out.write(buffer, 0, bytesRead);
+            }
+            return new String(out.toByteArray(), StandardCharsets.UTF_8);
+        }
+    }
+
+    /**     * Main method for testing the plugin standalone.
      */
     public static void main(String[] args) {
         // For testing purposes
