@@ -7,6 +7,7 @@ import ij.ImageStack;
 import ij.measure.Calibration;
 import ij.plugin.PlugIn;
 import ij.process.FloatProcessor;
+import ij.process.ImageProcessor;
 import ij.gui.GenericDialog;
 
 import org.apposed.appose.Environment;
@@ -56,7 +57,7 @@ public class BrimFileOpener implements PlugIn {
      * Open a BRIM file using the Python brimfile package via Apposed.
      * 
      * @param path Path to the BRIM file
-     * @return ImagePlus object containing the Brillouin shift image
+     * @return ImagePlus object containing the Brillouin image with the selected channels
      */
     private ImagePlus openBrimFile(String path) throws Exception {
         IJ.showStatus("Opening BRIM file...");
@@ -96,8 +97,12 @@ public class BrimFileOpener implements PlugIn {
 
             GenericDialog channels_selection_dialog = new GenericDialog("Select channels");
             for (String quantity : quantities) {
-                channels_selection_dialog.addCheckbox(quantity, false);
+                // set Shift to be selected by default since it is the most common quantity of interest, but allow users to easily select other quantities if they are interested in them
+                boolean defaultValue = quantity.equalsIgnoreCase("Shift");
+                channels_selection_dialog.addCheckbox(quantity, defaultValue);
             }
+            channels_selection_dialog.addMessage("Display options:");
+            channels_selection_dialog.addCheckbox("Resample XY to square pixels", true);
             channels_selection_dialog.showDialog();
             if (channels_selection_dialog.wasCanceled()) {
                 return null;
@@ -109,6 +114,8 @@ public class BrimFileOpener implements PlugIn {
                     selectedQuantities.add(quantity);
                 }
             }
+
+            boolean resampleXYForDisplay = channels_selection_dialog.getNextBoolean();
 
             if (selectedQuantities.isEmpty()) {
                 IJ.error("BRIM File Opener", "No channels selected.");
@@ -261,7 +268,7 @@ public class BrimFileOpener implements PlugIn {
             // Convert to ImageJ ImagePlus
             ImagePlus imp = convertToImagePlus(imageData, nc, nz, ny, nx,
                 pixelDepth, pixelHeight, pixelWidth, unit, 
-                dataGroupName, arName, path, channelNames);
+                dataGroupName, arName, path, channelNames, resampleXYForDisplay);
             
             IJ.showStatus("BRIM file loaded successfully");
             return imp;            
@@ -288,7 +295,8 @@ public class BrimFileOpener implements PlugIn {
      */
     private ImagePlus convertToImagePlus(List<Number> imageData, int nc, int nz, int ny, int nx,
                                          double pixelDepth, double pixelHeight, double pixelWidth, String unit,
-                                         String dataGroupName, String arName, String path, List<String> channelNames) {
+                                         String dataGroupName, String arName, String path, List<String> channelNames,
+                                         boolean resampleXYForDisplay) {
         // Create ImageStack
         ImageStack stack = new ImageStack(nx, ny);
         
@@ -315,9 +323,6 @@ public class BrimFileOpener implements PlugIn {
 
         imp.setDimensions(nc, nz, 1);
         imp.setOpenAsHyperStack(true);
-        if (nc > 1) {
-            imp = new CompositeImage(imp, CompositeImage.GRAYSCALE);
-        }
         
         // Set calibration
         Calibration cal = imp.getCalibration();
@@ -325,6 +330,14 @@ public class BrimFileOpener implements PlugIn {
         cal.pixelHeight = pixelHeight;
         cal.pixelDepth = pixelDepth;
         cal.setUnit(unit);
+
+        if (resampleXYForDisplay) {
+            imp = resampleXYToSquarePixels(imp);
+        }
+
+        if (nc > 1) {
+            imp = new CompositeImage(imp, CompositeImage.GRAYSCALE);
+        }
         
         // Set display properties
         imp.setDisplayRange(imp.getStatistics().min, imp.getStatistics().max);
