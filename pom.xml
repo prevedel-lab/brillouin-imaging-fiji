@@ -56,8 +56,7 @@
         <appose.version>0.11.0</appose.version>
         
         <!-- Java version -->
-        <maven.compiler.source>8</maven.compiler.source>
-        <maven.compiler.target>8</maven.compiler.target>
+        <maven.compiler.release>8</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
@@ -91,8 +90,7 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.11.0</version>
                 <configuration>
-                    <source>8</source>
-                    <target>8</target>
+                    <release>8</release>
                 </configuration>
             </plugin>
          <plugin>
@@ -113,9 +111,21 @@
                                     <exclude>META-INF/*.SF</exclude>
                                     <exclude>META-INF/*.DSA</exclude>
                                     <exclude>META-INF/*.RSA</exclude>
+                                    <exclude>module-info.class</exclude>
+                                    <exclude>META-INF/versions/*/module-info.class</exclude>
+                                    <exclude>META-INF/AL2.0</exclude>
+                                    <exclude>META-INF/LGPL2.1</exclude>
+                                    <exclude>META-INF/LICENSE</exclude>
+                                    <exclude>META-INF/LICENSE.txt</exclude>
+                                    <exclude>META-INF/NOTICE</exclude>
+                                    <exclude>META-INF/NOTICE.txt</exclude>
+                                    <exclude>META-INF/groovy-release-info.properties</exclude>
                                 </excludes>
                             </filter>
                         </filters>
+                        <transformers>
+                            <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer"/>
+                        </transformers>
                     </configuration>
                 </execution>
             </executions>
