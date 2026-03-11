@@ -9,6 +9,7 @@ import ij.plugin.PlugIn;
 import ij.process.FloatProcessor;
 import ij.process.ImageProcessor;
 import ij.gui.GenericDialog;
+import ij.text.TextWindow;
 
 import org.apposed.appose.Environment;
 import org.apposed.appose.NDArray;
@@ -83,6 +84,7 @@ public class BrimFileOpener implements PlugIn {
             String pythonCode = String.format(
                 "import brimfile as brim\n" +
                 "import numpy as np\n" +
+                "import pprint\n" +
                 "\n" +
                 "# Open the BRIM file\n" +
                 "f = brim.File('%s')\n" +
@@ -95,16 +97,27 @@ public class BrimFileOpener implements PlugIn {
                 "\n" +
                 "# Get the existing quantity of the first group and assume they all have the same\n" +
                 "existing_quantities = ar.list_existing_quantities()\n" +
-                "f.close()" +
                 "\n" +
-                "qts = [qt.name for qt in existing_quantities]" +
+                "# Get the metadata\n" +
+                "md = d.get_metadata()\n" +
+                "f.close()\n" +
                 "\n" +
-                "task.outputs['quantities'] = qts" ,
+                "qts = [qt.name for qt in existing_quantities]\n" +
+                "task.outputs['quantities'] = qts\n" +
+                "\n" +
+                "md_dict = md.all_to_dict()\n" +
+                "# Make sure the Metadata items are stored as strings (value + units)\n" +
+                "for t in md_dict.keys():\n" +
+                "    for item in md_dict[t].keys():\n" +
+                "        md_dict[t][item] = str(md_dict[t][item])\n" +
+                "task.outputs['metadata'] = md_dict\n" +
+                "task.outputs['metadata_pretty'] = pprint.pformat(md_dict)\n" ,
                 path.replace("\\", "\\\\")
             );
             Map<String, Object> outputs = PyUtils.executePythonCode(python, pythonCode);
             @SuppressWarnings("unchecked")
             List<String> quantities = (List<String>) outputs.get("quantities");
+            String metadataPretty = outputs.get("metadata_pretty") == null ? null : outputs.get("metadata_pretty").toString();
 
             GenericDialog channels_selection_dialog = new GenericDialog("Select channels");
             for (String quantity : quantities) {
@@ -132,6 +145,8 @@ public class BrimFileOpener implements PlugIn {
                 IJ.error("BRIM File Opener", "No channels selected.");
                 return null;
             }
+
+            showMetadataWindow(metadataPretty);
 
             String selectedQuantitiesLiteral = toPythonStringListLiteral(selectedQuantities);
             
@@ -348,6 +363,14 @@ public class BrimFileOpener implements PlugIn {
             // If the specified LUT command is not found, log a warning and continue without applying a LUT
             IJ.log("BRIM File Opener: LUT '" + DEFAULT_LUT_COMMAND + "' not found; using default LUT.");
         }
+    }
+
+    private void showMetadataWindow(String metadataPretty) {
+        if (metadataPretty == null || metadataPretty.trim().isEmpty()) {
+            return;
+        }
+
+        new TextWindow("BRIM Metadata", metadataPretty, 700, 500);
     }
 
     /**
