@@ -155,9 +155,22 @@ public class BrimFileOpener implements PlugIn {
             @SuppressWarnings("unchecked")
             List<String> channelNames = (List<String>) outputs.get("channel_names");
             @SuppressWarnings("unchecked")
-            List<String> channelErrors = (List<String>) outputs.get("channel_errors");
+            List<String> channelErrors = (List<String>) outputs.get("error_list");
+            if (channelErrors == null) {
+                @SuppressWarnings("unchecked")
+                List<String> legacyChannelErrors = (List<String>) outputs.get("channel_errors");
+                channelErrors = legacyChannelErrors;
+            }
 
             int nc = ((Number) outputs.get("num_channels")).intValue();
+            int nt = 1;
+            Object numTimepointsObject = outputs.get("num_timepoints");
+            if (numTimepointsObject instanceof Number) {
+                nt = ((Number) numTimepointsObject).intValue();
+            }
+            if (nt <= 0) {
+                nt = 1;
+            }
 
             if (channelNames == null) {
                 channelNames = new ArrayList<String>();
@@ -179,7 +192,7 @@ public class BrimFileOpener implements PlugIn {
             int ny = shapeList.get(1).intValue();
             int nx = shapeList.get(2).intValue();
 
-            float[] imageData = readImageDataFromSharedMemory(outputs.get("image_data"), nc, nz, ny, nx);
+            float[] imageData = readImageDataFromSharedMemory(outputs.get("image_data"), nt, nc, nz, ny, nx);
             if (imageData == null) {
                 IJ.error("BRIM File Opener", "Failed to read image data from shared memory.");
                 return null;
@@ -194,7 +207,7 @@ public class BrimFileOpener implements PlugIn {
             String unit = (String) outputs.get("pixel_unit");
             
             // Convert to ImageJ ImagePlus
-            ImagePlus imp = convertToImagePlus(imageData, nc, nz, ny, nx,
+            ImagePlus imp = convertToImagePlus(imageData, nt, nc, nz, ny, nx,
                 pixelDepth, pixelHeight, pixelWidth, unit, 
                 dataGroupName, arName, path, channelNames, resampleXYForDisplay);
             
@@ -203,13 +216,13 @@ public class BrimFileOpener implements PlugIn {
         }
     }
 
-    private float[] readImageDataFromSharedMemory(Object imageDataObject, int nc, int nz, int ny, int nx) {
+    private float[] readImageDataFromSharedMemory(Object imageDataObject, int nt, int nc, int nz, int ny, int nx) {
         if (!(imageDataObject instanceof NDArray)) {
             IJ.log("BRIM File Opener: image_data output is not an NDArray shared-memory object.");
             return null;
         }
 
-        long expectedElementsLong = (long) nc * (long) nz * (long) ny * (long) nx;
+        long expectedElementsLong = (long) nt * (long) nc * (long) nz * (long) ny * (long) nx;
         if (expectedElementsLong <= 0L || expectedElementsLong > Integer.MAX_VALUE) {
             IJ.log("BRIM File Opener: invalid image size for shared-memory transfer: " + expectedElementsLong + " elements.");
             return null;
@@ -224,10 +237,16 @@ public class BrimFileOpener implements PlugIn {
             }
 
             int[] shape = imageData.shape().toIntArray(NDArray.Shape.Order.C_ORDER);
-            if (shape.length != 4 || shape[0] != nz || shape[1] != nc || shape[2] != ny || shape[3] != nx) {
+            boolean shapeMatches5D = shape.length == 5 &&
+                shape[0] == nt && shape[1] == nz && shape[2] == nc && shape[3] == ny && shape[4] == nx;
+            boolean shapeMatchesLegacy4D = shape.length == 4 && nt == 1 &&
+                shape[0] == nz && shape[1] == nc && shape[2] == ny && shape[3] == nx;
+            if (!shapeMatches5D && !shapeMatchesLegacy4D) {
                 IJ.log(String.format(
-                    "BRIM File Opener: NDArray shape mismatch. Expected [%d, %d, %d, %d], got %s",
-                    nz, nc, ny, nx, java.util.Arrays.toString(shape)));
+                    "BRIM File Opener: NDArray shape mismatch. Expected [%d, %d, %d, %d, %d] (or legacy [%d, %d, %d, %d] when t=1), got %s",
+                    nt, nz, nc, ny, nx,
+                    nz, nc, ny, nx,
+                    java.util.Arrays.toString(shape)));
                 return null;
             }
 
@@ -262,32 +281,40 @@ public class BrimFileOpener implements PlugIn {
     /**
      * Convert flattened image data to ImageJ ImagePlus.
      */
-    private ImagePlus convertToImagePlus(float[] imageData, int nc, int nz, int ny, int nx,
+    private ImagePlus convertToImagePlus(float[] imageData, int nt, int nc, int nz, int ny, int nx,
                                          double pixelDepth, double pixelHeight, double pixelWidth, String unit,
                                          String dataGroupName, String arName, String path, List<String> channelNames,
                                          boolean resampleXYForDisplay) {
         // Create ImageStack
         ImageStack stack = new ImageStack(nx, ny);
         
-        // Convert flattened list to ImageJ hyperstack order: C changes fastest, then Z.
-        for (int z = 0; z < nz; z++) {
-            for (int c = 0; c < nc; c++) {
-                float[] pixels = new float[nx * ny];
-                int baseIndex = (z * nc + c) * nx * ny;
-                System.arraycopy(imageData, baseIndex, pixels, 0, nx * ny);
+        // Convert flattened list to ImageJ hyperstack order: C changes fastest, then Z, then T.
+        for (int t = 0; t < nt; t++) {
+            for (int z = 0; z < nz; z++) {
+                for (int c = 0; c < nc; c++) {
+                    float[] pixels = new float[nx * ny];
+                    int baseIndex = ((t * nz + z) * nc + c) * nx * ny;
+                    System.arraycopy(imageData, baseIndex, pixels, 0, nx * ny);
 
-                FloatProcessor fp = new FloatProcessor(nx, ny, pixels);
-                String channelName = c < channelNames.size() ? channelNames.get(c) : "ch" + (c + 1);
-                stack.addSlice(channelName + " z=" + (z + 1), fp);
+                    FloatProcessor fp = new FloatProcessor(nx, ny, pixels);
+                    String channelName = c < channelNames.size() ? channelNames.get(c) : "ch" + (c + 1);
+                    stack.addSlice(channelName + " z=" + (z + 1) + " t=" + (t + 1), fp);
+                }
             }
         }
         
         // Create ImagePlus
         String channelTitle = (nc == 1 && !channelNames.isEmpty()) ? channelNames.get(0) : "Channels";
+        if (dataGroupName == null || dataGroupName.trim().isEmpty()) {
+            dataGroupName = "Data";
+        }
+        if (arName == null || arName.trim().isEmpty()) {
+            arName = "Analysis";
+        }
         String title = new File(path).getName() + " - " + dataGroupName + " - " + arName + " - " + channelTitle;
         ImagePlus imp = new ImagePlus(title, stack);
 
-        imp.setDimensions(nc, nz, 1);
+        imp.setDimensions(nc, nz, nt);
         imp.setOpenAsHyperStack(true);
         
         // Set calibration
