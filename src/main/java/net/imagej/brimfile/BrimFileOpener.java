@@ -27,6 +27,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class BrimFileOpener implements PlugIn {
 
     private static final AtomicBoolean BRIMFILE_VERSION_LOGGED = new AtomicBoolean(false);
+    private static final double MAX_DISPLAY_RESAMPLE_FACTOR = 8.0;
+    private static final String DEFAULT_LUT_COMMAND = "mpl-inferno";
 
     @Override
     public void run(String arg) {
@@ -326,8 +328,83 @@ public class BrimFileOpener implements PlugIn {
         
         // Set display properties
         imp.setDisplayRange(imp.getStatistics().min, imp.getStatistics().max);
+        applyDefaultLut(imp);
         
         return imp;
+    }
+
+    private void applyDefaultLut(ImagePlus imp) {
+        try {
+            IJ.run(imp, DEFAULT_LUT_COMMAND, "");
+        } catch (Exception e) {
+            // If the specified LUT command is not found, log a warning and continue without applying a LUT
+            IJ.log("BRIM File Opener: LUT '" + DEFAULT_LUT_COMMAND + "' not found; using default LUT.");
+        }
+    }
+
+    /**
+     * Resample the XY plane so display proportions match physical pixel size.
+     * The field of view is preserved by adjusting dimensions and setting square XY calibration.
+     */
+    private ImagePlus resampleXYToSquarePixels(ImagePlus imp) {
+        Calibration cal = imp.getCalibration();
+        if (cal == null) {
+            return imp;
+        }
+
+        double pixelWidth = cal.pixelWidth;
+        double pixelHeight = cal.pixelHeight;
+        if (pixelWidth <= 0 || pixelHeight <= 0) {
+            return imp;
+        }
+
+        // if the ratio is close enough to 1, skip resampling to avoid unnecessary interpolation
+        double ratio = pixelWidth / pixelHeight;
+        if (Math.abs(ratio - 1.0) < 1e-9) {
+            return imp;
+        }
+
+        // if the scale factor is larger than MAX_DISPLAY_RESAMPLE_FACTOR, skip resampling
+        double scaleFactor = ratio >= 1.0 ? ratio : 1.0 / ratio;
+        if (scaleFactor > MAX_DISPLAY_RESAMPLE_FACTOR) {
+            IJ.log(String.format(
+                "BRIM File Opener: skipped XY display resampling because anisotropy factor %.3f exceeds max %.1f",
+                scaleFactor, MAX_DISPLAY_RESAMPLE_FACTOR));
+            return imp;
+        }
+
+        int originalWidth = imp.getWidth();
+        int originalHeight = imp.getHeight();
+        int targetWidth = originalWidth;
+        int targetHeight = originalHeight;
+
+        if (ratio > 1.0) {
+            targetWidth = Math.max(1, (int) Math.round(originalWidth * ratio));
+        } else {
+            targetHeight = Math.max(1, (int) Math.round(originalHeight / ratio));
+        }
+
+        ImageStack sourceStack = imp.getStack();
+        ImageStack resizedStack = new ImageStack(targetWidth, targetHeight);
+        for (int i = 1; i <= sourceStack.getSize(); i++) {
+            ImageProcessor ip = sourceStack.getProcessor(i);
+            ip.setInterpolationMethod(ImageProcessor.BILINEAR);
+            ImageProcessor resized = ip.resize(targetWidth, targetHeight);
+            resizedStack.addSlice(sourceStack.getSliceLabel(i), resized);
+        }
+
+        ImagePlus resizedImp = new ImagePlus(imp.getTitle(), resizedStack);
+        resizedImp.setDimensions(imp.getNChannels(), imp.getNSlices(), imp.getNFrames());
+        resizedImp.setOpenAsHyperStack(imp.isHyperStack());
+        resizedImp.setPosition(imp.getChannel(), imp.getSlice(), imp.getFrame());
+
+        Calibration resizedCal = cal.copy();
+        double squarePixelSize = Math.min(pixelWidth, pixelHeight);
+        resizedCal.pixelWidth = squarePixelSize;
+        resizedCal.pixelHeight = squarePixelSize;
+        resizedImp.setCalibration(resizedCal);
+
+        return resizedImp;
     }
 
     private String toPythonStringListLiteral(List<String> values) {
