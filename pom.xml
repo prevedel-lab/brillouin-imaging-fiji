@@ -53,7 +53,7 @@
         <license.copyrightOwners>Prevedel Lab</license.copyrightOwners>
         
         <!-- Apposed version -->
-        <appose.version>0.8.0</appose.version>
+        <appose.version>0.11.0</appose.version>
         
         <!-- Java version -->
         <maven.compiler.source>8</maven.compiler.source>
