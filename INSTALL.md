@@ -74,9 +74,11 @@ Download and install FIJI or ImageJ:
    - This may take a few minutes but only happens once
 
 5. The plugin will then:
-   - Load the first data group in the BRIM file
-   - Extract the first analysis results
-   - Display the Brillouin shift image with proper calibration
+   - Read available quantities and ask you which channels to load
+   - Load selected quantities across data groups (using the first analysis result per group)
+   - Stack compatible groups as timepoints in one hyperstack
+   - Display metadata in a `BRIM Metadata` text window
+   - Show the calibrated result with an inferno LUT
 
 ### Subsequent Uses
 
@@ -86,6 +88,13 @@ After the first run, opening BRIM files is fast because the Python environment i
 
 - `.brim.zarr` - BRIM files stored as Zarr directories
 - `.brim.zip` - BRIM files stored as ZIP archives
+
+### Drag and Drop
+
+- Dragging a `.brim.zip` file or `.brim.zarr` folder into FIJI is supported.
+- The BRIM drag-and-drop handler is installed automatically the first time you run **File > Import > BRIM File (.brim.zarr, .brim.zip)...**.
+- You can also enable it manually via **File > Import > Enable BRIM Drag-and-Drop**.
+- The handler installation is session-scoped and must be re-enabled after restarting FIJI.
 
 ## Troubleshooting
 

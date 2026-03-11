@@ -6,12 +6,16 @@ A FIJI/ImageJ plugin to open and work with BRIM (Brillouin Imaging) files contai
 
 This plugin enables ImageJ/FIJI to read `.brim.zarr` and `.brim.zip` files, which contain spectral data and metadata from Brillouin microscopy. The plugin uses [Apposed](https://apposed.org/) to interface with the Python [brimfile package](https://github.com/prevedel-lab/brimfile) in a separate Python process.
 
-At the current stage, this is a proof of concept to open a BRIM file and it doesn't allow to select the quantity (i.e. shift, width, etc...) and timelapses. More work is planned to extend it.
+The plugin supports selecting one or more quantities (for example Shift and Width), loading compatible data groups as timepoints, and displaying the result as an ImageJ hyperstack. It also supports drag-and-drop opening of BRIM files and folders in the FIJI window. The first analysis result in each data group is currently used.
 
 ## Features
 
 - Open BRIM files (`.brim.zarr` and `.brim.zip` formats)
-- Display Brillouin shift images with proper pixel size, read from the metadata
+- Select one or more quantities to load as channels
+- Stack compatible data groups as timepoints in a single hyperstack
+- Show BRIM metadata in a separate ImageJ text window
+- Preserve voxel calibration and optionally resample XY to square pixels for display
+- Support drag-and-drop opening for BRIM files and folders
 - Automatic Python environment setup with brimfile dependency
 
 ## Installation
@@ -53,7 +57,9 @@ On first use, the plugin will automatically:
 
 1. In FIJI/ImageJ, go to **File > Import > BRIM File (.brim.zarr, .brim.zip)...**
 2. Select your BRIM file in the file chooser
-3. The plugin will load the Brillouin shift image and display it
+3. Select one or more quantities in the channel selection dialog
+4. Optionally keep **Resample XY to square pixels** enabled for physically proportioned display
+5. The plugin loads selected quantities and opens the result as an ImageJ hyperstack
 
 ### Drag And Drop
 
@@ -63,10 +69,12 @@ On first use, the plugin will automatically:
 - The installation needs to be done again if you restart FIJI.
 
 The plugin automatically:
-- Loads the first data group in the BRIM file
-- Extracts the first analysis results
-- Displays the Brillouin shift image with proper calibration
-- Applies appropriate display range based on image statistics
+- Reads available quantities from the first data group
+- Loads selected quantities across data groups using the first analysis result of each group
+- Stacks compatible groups as timepoints (T)
+- Displays metadata in a `BRIM Metadata` text window
+- Preserves calibration and applies an inferno LUT for display
+- Logs skipped channels or groups (for example, due to shape mismatch) in the ImageJ log
 
 ### Supported File Formats
 
@@ -95,11 +103,15 @@ brillouin-imaging-fiji/
 │   ├── main/
 │   │   ├── java/
 │   │   │   └── net/imagej/brimfile/
-│   │   │       └── BrimFileOpener.java       # Main plugin class
+│   │   │       ├── BrimFileOpener.java       # Main import/open workflow
+│   │   │       ├── BrimDropHandler.java      # BRIM-specific drag-and-drop handling
+│   │   │       ├── FileInput.java            # Path normalization and file selection helpers
+│   │   │       └── PyUtils.java              # Appose environment and Python task helpers
 │   │   └── resources/
-│   │       └── plugins.config                # Plugin registration
+│   │       ├── plugins.config                # Plugin registration
+│   │       └── script/load_brimfile.py       # Python bridge script for data loading
 │   └── test/
-│       └── java/                             # Unit tests
+│       └── java/                             # Unit + integration tests
 └── README.md
 ```
 
@@ -131,8 +143,8 @@ The plugin uses Apposed to:
 1. Create and manage a Python virtual environment with uv
 2. Automatically install the brimfile package and dependencies
 3. Execute Python scripts in a separate process
-4. Transfer data between Java and Python efficiently
-5. Convert NumPy arrays to ImageJ ImagePlus objects
+4. Transfer image data using Appose shared-memory `NDArray` objects
+5. Convert arrays into calibrated ImageJ hyperstacks (C, Z, T)
 
 This approach provides:
 - **Automatic setup**: No manual Python installation or configuration required
