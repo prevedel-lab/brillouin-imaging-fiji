@@ -11,9 +11,11 @@ import ij.process.ImageProcessor;
 import ij.gui.GenericDialog;
 
 import org.apposed.appose.Environment;
+import org.apposed.appose.NDArray;
 import org.apposed.appose.Service;
 
 import java.io.File;
+import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -66,6 +68,9 @@ public class BrimFileOpener implements PlugIn {
         Environment env = PyUtils.getOrCreateBrimfileEnvironment();
         
         try (Service python = env.python()) {
+            // Redirect Python output to ImageJ log for debugging
+            python.debug(line -> System.out.println("[Python] " + line));
+
             logBrimfileVersionIfNeeded(python);
             IJ.showStatus("Loading BRIM file...");   
             
@@ -126,6 +131,7 @@ public class BrimFileOpener implements PlugIn {
             
             // TODO: check if there is a way of sharing variables between tasks rather than closing the file and opening it again here
             pythonCode = String.format(
+                "import appose\n" +
                 "import brimfile as brim\n" +
                 "import numpy as np\n" +
                 "\n" +
@@ -135,7 +141,7 @@ public class BrimFileOpener implements PlugIn {
                 "\n" +
                 "# Define outputs in case loading fails\n" +
                 "task.outputs['image_shape'] = [0, 0, 0]\n" +
-                "task.outputs['image_data'] = []\n" +
+                "task.outputs['image_data'] = None\n" +
                 "task.outputs['channel_names'] = []\n" +
                 "task.outputs['num_channels'] = 0\n" +
                 "task.outputs['channel_errors'] = []\n" +
@@ -185,12 +191,12 @@ public class BrimFileOpener implements PlugIn {
                 "\n" +
                 "    if image_shape is not None and channel_images:\n" +
                 "        nz, ny, nx = image_shape\n" +
-                "        stack_data = []\n" +
-                "        for z in range(nz):\n" +
-                "            for channel_img in channel_images:\n" +
-                "                stack_data.extend(channel_img[z].flatten().tolist())\n" +
+                "        stack_data = appose.NDArray('float32', [nz, len(channel_images), ny, nx])\n" +
+                "        stack_view = stack_data.ndarray()\n" +
+                "        for c, channel_img in enumerate(channel_images):\n" +
+                "            stack_view[:, c, :, :] = channel_img.astype(np.float32, copy=False)\n" +
                 "    else:\n" +
-                "        stack_data = []\n" +
+                "        stack_data = None\n" +
                 "        image_shape = (0, 0, 0)\n" +
                 "\n" +
                 "    data_group_name = d.get_name()\n" +
@@ -225,9 +231,6 @@ public class BrimFileOpener implements PlugIn {
 
             IJ.showStatus("Converting to ImageJ format...");
             
-            // Extract image data from task outputs
-            @SuppressWarnings("unchecked")
-            List<Number> imageData = (List<Number>) outputs.get("image_data");
             @SuppressWarnings("unchecked")
             List<Number> shapeList = (List<Number>) outputs.get("image_shape");
             @SuppressWarnings("unchecked")
@@ -248,7 +251,7 @@ public class BrimFileOpener implements PlugIn {
                 }
             }
 
-            if (nc <= 0 || shapeList == null || shapeList.size() < 3 || imageData == null || imageData.isEmpty()) {
+            if (nc <= 0 || shapeList == null || shapeList.size() < 3) {
                 IJ.error("BRIM File Opener", "None of the selected channels could be loaded.");
                 return null;
             }
@@ -256,6 +259,12 @@ public class BrimFileOpener implements PlugIn {
             int nz = shapeList.get(0).intValue();
             int ny = shapeList.get(1).intValue();
             int nx = shapeList.get(2).intValue();
+
+            float[] imageData = readImageDataFromSharedMemory(outputs.get("image_data"), nc, nz, ny, nx);
+            if (imageData == null) {
+                IJ.error("BRIM File Opener", "Failed to read image data from shared memory.");
+                return null;
+            }
             
             String dataGroupName = (String) outputs.get("data_group_name");
             String arName = (String) outputs.get("ar_name");
@@ -275,6 +284,48 @@ public class BrimFileOpener implements PlugIn {
         }
     }
 
+    private float[] readImageDataFromSharedMemory(Object imageDataObject, int nc, int nz, int ny, int nx) {
+        if (!(imageDataObject instanceof NDArray)) {
+            IJ.log("BRIM File Opener: image_data output is not an NDArray shared-memory object.");
+            return null;
+        }
+
+        long expectedElementsLong = (long) nc * (long) nz * (long) ny * (long) nx;
+        if (expectedElementsLong <= 0L || expectedElementsLong > Integer.MAX_VALUE) {
+            IJ.log("BRIM File Opener: invalid image size for shared-memory transfer: " + expectedElementsLong + " elements.");
+            return null;
+        }
+
+        int expectedElements = (int) expectedElementsLong;
+
+        try (NDArray imageData = (NDArray) imageDataObject) {
+            if (imageData.dType() != NDArray.DType.FLOAT32) {
+                IJ.log("BRIM File Opener: unsupported NDArray dtype " + imageData.dType() + "; expected FLOAT32.");
+                return null;
+            }
+
+            int[] shape = imageData.shape().toIntArray(NDArray.Shape.Order.C_ORDER);
+            if (shape.length != 4 || shape[0] != nz || shape[1] != nc || shape[2] != ny || shape[3] != nx) {
+                IJ.log(String.format(
+                    "BRIM File Opener: NDArray shape mismatch. Expected [%d, %d, %d, %d], got %s",
+                    nz, nc, ny, nx, java.util.Arrays.toString(shape)));
+                return null;
+            }
+
+            FloatBuffer floatBuffer = imageData.buffer().asFloatBuffer();
+            if (floatBuffer.remaining() < expectedElements) {
+                IJ.log(String.format(
+                    "BRIM File Opener: NDArray buffer too small. Expected at least %d float elements, got %d",
+                    expectedElements, floatBuffer.remaining()));
+                return null;
+            }
+
+            float[] pixels = new float[expectedElements];
+            floatBuffer.get(pixels);
+            return pixels;
+        }
+    }
+
     private void logBrimfileVersionIfNeeded(Service python) {
         if (BRIMFILE_VERSION_LOGGED.get()) {
             return;
@@ -283,7 +334,6 @@ public class BrimFileOpener implements PlugIn {
         String version = PyUtils.getBrimfileVersion(python);
         String message = "BRIM File Opener using brimfile Python package version: " + version;
 
-        IJ.log(message);
         System.out.println(message);
         BRIMFILE_VERSION_LOGGED.set(true);
     }
@@ -293,7 +343,7 @@ public class BrimFileOpener implements PlugIn {
     /**
      * Convert flattened image data to ImageJ ImagePlus.
      */
-    private ImagePlus convertToImagePlus(List<Number> imageData, int nc, int nz, int ny, int nx,
+    private ImagePlus convertToImagePlus(float[] imageData, int nc, int nz, int ny, int nx,
                                          double pixelDepth, double pixelHeight, double pixelWidth, String unit,
                                          String dataGroupName, String arName, String path, List<String> channelNames,
                                          boolean resampleXYForDisplay) {
@@ -305,10 +355,7 @@ public class BrimFileOpener implements PlugIn {
             for (int c = 0; c < nc; c++) {
                 float[] pixels = new float[nx * ny];
                 int baseIndex = (z * nc + c) * nx * ny;
-
-                for (int i = 0; i < nx * ny; i++) {
-                    pixels[i] = imageData.get(baseIndex + i).floatValue();
-                }
+                System.arraycopy(imageData, baseIndex, pixels, 0, nx * ny);
 
                 FloatProcessor fp = new FloatProcessor(nx, ny, pixels);
                 String channelName = c < channelNames.size() ? channelNames.get(c) : "ch" + (c + 1);
