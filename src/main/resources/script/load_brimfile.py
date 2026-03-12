@@ -9,8 +9,9 @@ String formatting parameters:
 """
 
 import appose
-import brimfile as brim
-import numpy as np
+# brimfile and numpy are already imported in the Python environment by BrimFileOpener.java, so we don't need to import them here.
+# import brimfile as brim
+# import numpy as np
 
 # Open the BRIM file
 f = brim.File('%s')

@@ -73,8 +73,11 @@ public class BrimFileOpener implements PlugIn {
         
         // Create or get a Python environment with brimfile installed
         Environment env = PyUtils.getOrCreateBrimfileEnvironment();
+
+        String pythonImports = "import numpy as np\n"+
+                                "import brimfile as brim\n" ;
         
-        try (Service python = env.python()) {
+        try (Service python = env.python().init(pythonImports)) {
             // Redirect Python output to ImageJ log for debugging
             python.debug(line -> System.out.println("[Python] " + line));
 
@@ -82,8 +85,6 @@ public class BrimFileOpener implements PlugIn {
             IJ.showStatus("Loading BRIM file...");   
             
             String pythonCode = String.format(
-                "import brimfile as brim\n" +
-                "import numpy as np\n" +
                 "import pprint\n" +
                 "\n" +
                 "# Open the BRIM file\n" +
